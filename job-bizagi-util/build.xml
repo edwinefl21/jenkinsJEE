@@ -1,0 +1,117 @@
+<project name="bizagi-git" basedir="." xmlns:artifact="antlib:org.apache.maven.artifact.ant">
+
+    <!-- Properties -->
+    <property file="${basedir}\..\ci.properties"/>
+    <property environment="env"/>
+
+    <!-- Load dependencies from maven -->
+    <artifact:dependencies pathId="bant.classpath">
+        <dependency groupId="com.bizagi.tools" artifactId="bizagi-ant" version="${bant-version}" scope="provided"/>
+        <dependency groupId="ant-contrib" artifactId="ant-contrib" version="1.0b3" scope="provided"/>
+    </artifact:dependencies>
+
+    <!-- TaskDef -->
+    <taskdef resource="net/sf/antcontrib/antcontrib.properties" classpathref="bant.classpath"/>
+    <taskdef name="delete-releases" classname="com.vision.bizagi.ant.DeleteReleases" classpathref="bant.classpath"/>
+    <taskdef name="jira-add-next-week-version" classname="com.vision.bizagi.ant.JiraAddNextWeekVersion" classpathref="bant.classpath"/>
+
+
+    <!-- Hudson: JiraAddNextWeekVersion > Adds the version number for the next week sprint -->
+    <target name="jira-add-versions" description="Creates versions on jira">
+        <foreach list="${project-list}" param="project-key" target="-jira-add-version-in-branch"/>
+    </target>
+    <target name="-jira-add-version-in-branch" description="Private target to create versions on a single project and branch">
+        <jira-add-next-week-version 
+            jiraUrl="${jira-url}" jiraUser="${jira-adminuser}" jiraPass="${jira-adminpass}"
+            versionPrefix="${version-prefix}" projectKey="${project-key}" ignoreWeekend="${ignore-weekend}"/>
+    </target>
+
+
+    <!-- Hudson: DeleteOldReleases > Deletes old releases in nexus -->
+    <target name="nexus-delete-releases" description="Deletes old releases in nexus">
+        <delete-releases 
+            nexus="${nexus}" repository="${repository}" groupId="${group-id}" artifactId="${artifact-id}"
+            user="${nexus-adminuser}" password="${nexus-adminpass}" maxDaysToKeep="${days-to-keep}"/>
+    </target>
+
+
+    <!-- Hudson: GitBackup > Backup process of the git repository -->
+    <target name="git-backup" description="Backups the central Git Repository">
+        <!--Initialization-->
+        <mkdir dir="${basedir}\target"/><!--Create if doesn't exists-->
+        <delete includeemptydirs="true">
+            <fileset dir="${basedir}\target" includes="**/*"/>
+        </delete>
+
+        <tstamp> 
+            <format property="currenttime" pattern="yyyyMMdd_HHmmss"/>
+        </tstamp>
+
+        <echo message="Keeping at least ${git-min-backups} backups" />
+        <echo message="Backup dir : ${git-backup-dir}" />
+
+        <echo message="${line.separator}***** 1/4 Mirror clone the current git server *****${line.separator}"/>
+
+       <exec dir="${basedir}\target" executable="git" failonerror="true">
+            <arg line="clone git@devs-jbizagi:bizagi-jee.git bizagi-jee_${currenttime} --mirror"/>
+        </exec>
+        <exec dir="${basedir}\target" executable="git" failonerror="true">
+            <arg line="clone git@devs-jbizagi:bizagi-docs.git bizagi-docs_${currenttime} --mirror"/>
+        </exec>
+        <exec dir="${basedir}\target" executable="git" failonerror="true">
+            <arg line="clone git@devs-jbizagi:bizagi-jdbc-driver.git bizagi-jdbc-driver_${currenttime} --mirror"/>
+        </exec>
+        <exec dir="${basedir}\target" executable="git" failonerror="true">
+            <arg line="clone git@devs-jbizagi:bizagi-swagger.git bizagi-swagger_${currenttime} --mirror"/>
+        </exec>
+
+        <echo message="${line.separator}***** 2/4 Save the repo to a Zip file *****${line.separator}"/>
+        <zip destfile="${basedir}\target\Backup_BizagiJEE_${currenttime}.zip">
+            <zipfileset dir="${basedir}\target\bizagi-jee_${currenttime}" prefix="bizagi-jee.git"/>
+            <zipfileset dir="${basedir}\target\bizagi-docs_${currenttime}" prefix="bizagi-docs.git"/>
+            <zipfileset dir="${basedir}\target\bizagi-jdbc-driver_${currenttime}" prefix="bizagi-jdbc-driver.git"/>
+            <zipfileset dir="${basedir}\target\bizagi-swagger_${currenttime}" prefix="bizagi-swagger.git"/>
+            <zipfileset dir="${env.JENKINS_HOME}" prefix="jenkins">
+                <exclude name="**/jobs/**/builds/**"/>
+                <exclude name="**/jobs/**/workspace/**"/>
+                <exclude name="**/jobs/**/last*/**"/>
+            </zipfileset>
+        </zip>
+
+        <echo message="${line.separator}***** 3/4 Store the Zip file *****${line.separator}"/>
+        <copy todir="${git-backup-dir}" encoding="UTF-8">
+            <fileset dir="${basedir}\target\">
+                <include name="Backup_BizagiJEE_${currenttime}.zip" />
+            </fileset>
+        </copy>
+
+        <echo message="${line.separator}***** 4/4 Delete older backups *****${line.separator}"/>
+        <antcall target="delete-old-backups"/>
+    </target>
+
+    <target name="delete-old-backups" if="more-than-minimun" depends="mininum-backup">
+        <tstamp>
+            <format pattern="MM/dd/yyyy HH:MM aa" offset="-${git-min-backups}" unit="day" property="backup-deletedate" />
+        </tstamp>
+
+        <echo message="    Deleting backup files created on or before ${backup-deletedate}" />
+        <delete verbose="true" includeemptydirs="true">
+            <fileset dir="${git-backup-dir}" includes="Backup_BizagiJEE_*.zip">
+                <date datetime="${backup-deletedate}" when="before" checkdirs="true" />
+            </fileset>
+        </delete>
+    </target>
+
+    <target name="mininum-backup">
+        <path id="backup-list">
+            <fileset dir="${git-backup-dir}" includes="Backup_BizagiJEE_*.zip"/>
+        </path>
+
+        <resourcecount property="total" refid="backup-list"/>
+        <echo message="    Total backups found = ${total}"/>
+
+        <condition property="more-than-minimun">
+            <resourcecount refid="backup-list" when="gt" count="${git-min-backups}"/>
+        </condition>
+    </target>
+</project>
